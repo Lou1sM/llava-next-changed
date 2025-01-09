@@ -223,7 +223,8 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                         rank0_print(f"Overwriting config with {overwrite_config}")
                         for k, v in overwrite_config.items():
                             setattr(llava_cfg, k, v)
-                        model = LlavaQwenForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
+                        kwargs['device_map'] = None
+                        model = LlavaQwenForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=False, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
                     else:
                         model = LlavaQwenForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, **kwargs)
 
