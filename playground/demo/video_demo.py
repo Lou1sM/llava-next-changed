@@ -1,6 +1,11 @@
+from time import time
 import argparse
-import torch
+import os
+from os.path import join
 
+import torch
+import numpy as np
+torch.from_numpy(np.ones(4))
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from llava.conversation import conv_templates, SeparatorStyle
 from llava.model.builder import load_pretrained_model
@@ -18,22 +23,6 @@ from transformers import AutoConfig
 import cv2
 import base64
 
-import numpy as np
-import warnings
-
-# Enable stack traces for all warnings
-#warnings.simplefilter("always")  # Ensure all warnings are shown
-#warnings.filterwarnings("always")  # Force warnings to display
-
-# Optionally hook into `warnings.showwarning`
-def custom_showwarning(message, category, filename, lineno, file=None, line=None):
-    import traceback
-    print(f"Warning: {message} (Category: {category})")
-    traceback.print_stack()
-
-#warnings.showwarning = custom_showwarning
-
-# Run your code
 
 
 def split_list(lst, n):
@@ -47,11 +36,9 @@ def get_chunk(lst, n, k):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--video_path", help="Path to the video files.", required=True)
-    parser.add_argument("--output_dir", help="Directory to save the model results JSON.", required=True)
-    parser.add_argument("--output_name", help="Name of the file for storing results JSON.", required=True)
-    parser.add_argument("--model-path", type=str, default="facebook/opt-350m")
+    parser.add_argument("--model-path", type=str, default='lmms-lab/LLaVA-Video-7B-Qwen2')
     parser.add_argument("--model-base", type=str)
+    parser.add_argument("--data-dir-prefix", type=str, default='.')
     parser.add_argument("--conv-mode", type=str, default='default')
     parser.add_argument("--chunk-idx", type=int, default=0)
     parser.add_argument("--mm_resampler_type", type=str, default="spatial_pool")
@@ -70,6 +57,10 @@ def parse_args():
     parser.add_argument("--force_sample", type=lambda x: (str(x).lower() == 'true'), default=False)
     parser.add_argument("--add_time_instruction", type=str, default=False)
     parser.add_argument("--cpu", action='store_true')
+    parser.add_argument("--recompute", action='store_true')
+    parser.add_argument('--show-name', type=str, default='friends')
+    parser.add_argument('--season', type=int, default=2)
+    parser.add_argument('--ep', type=int, required=True)
     return parser.parse_args()
 
 def load_video(video_path,args):
@@ -107,91 +98,60 @@ def load_video_base64(path):
     # print(len(base64Frames), "frames read.")
     return base64Frames
 
-def run_inference(args):
+def run_inference(args, tokenizer, model, image_processor, show_name, season, episode):
     """Run inference on ActivityNet QA DataSet using the Video-ChatGPT model."""
 
-    model_name = get_model_name_from_path(args.model_path)
+    outputs_dict = {}
+    vid_subpath = f'{show_name}/season_{season}/episode_{episode}'
+    #video_path = join('../amazon_video/data/full-videos', f'{vid_subpath}.mp4')
+    video_path = join(args.data_dir_prefix, 'tvqa-videos', f'{vid_subpath}.mp4')
+    assert os.path.exists(video_path)
+    scene_split_points = np.load(f'{args.data_dir_prefix}/tvqa-kfs-by-scene/{vid_subpath}/scenesplit_timepoints.npy')
+    args.for_get_frames_num *= len(scene_split_points)+1
+    video,frame_time,video_time = load_video(video_path, args)
+    ext_split_points = np.array([0] + list(scene_split_points) + [video_time])
+    idx_split_points = (scene_split_points*args.for_get_frames_num / video_time).astype(int)
+    idx_split_points = np.append(idx_split_points, args.for_get_frames_num)
+    all_videos = [video[idx_split_points[i]:idx_split_points[i+1]] for i in range(len(idx_split_points)-1)]
+    # load splittimes, split into scenes, loop through and write output to
+    # a file with scene num appended
+    os.makedirs(out_dir:=f'{args.data_dir_prefix}/lava-outputs/{vid_subpath}', exist_ok=True)
+    json_out_fp = os.path.join(out_dir, 'all.json')
     # Set model configuration parameters if they exist
-    if args.overwrite == True:
-        overwrite_config = {}
-        overwrite_config["mm_spatial_pool_mode"] = args.mm_spatial_pool_mode
-        overwrite_config["mm_spatial_pool_stride"] = args.mm_spatial_pool_stride
-        overwrite_config["mm_newline_position"] = args.mm_newline_position
 
-        cfg_pretrained = AutoConfig.from_pretrained(args.model_path)
+    run_starttime = time()
+    for i, scene_video in enumerate(all_videos):
+        out_fp = join(out_dir, f'scene{i}')
+        if os.path.exists(out_fp) and not args.recompute:
+            print(f'{out_fp} already exists, skipping')
+            continue
+        scene_video = image_processor.preprocess(scene_video, return_tensors="pt")["pixel_values"].half().cuda()
+        #scene_video = image_processor.preprocess(scene_video, return_tensors=None)
+        scene_video = [scene_video]
 
-        if "qwen" not in args.model_path.lower():
-            if "224" in cfg_pretrained.mm_vision_tower:
-                # suppose the length of text tokens is around 1000, from bo's report
-                least_token_number = args.for_get_frames_num*(16//args.mm_spatial_pool_stride)**2 + 1000
-            else:
-                least_token_number = args.for_get_frames_num*(24//args.mm_spatial_pool_stride)**2 + 1000
+        if getattr(model.config, "force_sample", None) is not None:
+            args.force_sample = model.config.force_sample
+        else:
+            args.force_sample = False
 
-            scaling_factor = math.ceil(least_token_number/4096)
-            if scaling_factor >= 2:
-                if "vicuna" in cfg_pretrained._name_or_path.lower():
-                    print(float(scaling_factor))
-                    overwrite_config["rope_scaling"] = {"factor": float(scaling_factor), "type": "linear"}
-                overwrite_config["max_sequence_length"] = 4096 * scaling_factor
-                overwrite_config["tokenizer_model_max_length"] = 4096 * scaling_factor
+        if getattr(model.config, "add_time_instruction", None) is not None:
+            args.add_time_instruction = model.config.add_time_instruction
+        else:
+            args.add_time_instruction = False
 
-        tokenizer, model, image_processor, context_len = load_pretrained_model(args.model_path, args.model_base, model_name, load_8bit=args.load_8bit, overwrite_config=overwrite_config, attn_implementation='sdpa')
-
-    if getattr(model.config, "force_sample", None) is not None:
-        args.force_sample = model.config.force_sample
-    else:
-        args.force_sample = False
-
-    if getattr(model.config, "add_time_instruction", None) is not None:
-        args.add_time_instruction = model.config.add_time_instruction
-    else:
-        args.add_time_instruction = False
-
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    json_out_fp = os.path.join(args.output_dir, f"{args.output_name}.json")
-    #ans_file = open(answers_file, "w")
-
-    all_video_paths = []
-
-    if os.path.isdir(args.video_path):
-        for filename in os.listdir(args.video_path):
-            cur_video_path = os.path.join(args.video_path, f"{filename}")
-            all_video_paths.append(os.path.join(args.video_path, cur_video_path))
-    else:
-        all_video_paths.append(args.video_path)
-
-    #for args.video_path in all_video_pathes:
-    for video_path in all_video_paths:
-
-        sample_set = {}
-        #question = args.prompt
-        #question = "what are the key events in this video?"
-        #sample_set["Q"] = question
-        #sample_set["video_name"] = args.video_path
-
-        assert os.path.exists(video_path)
-        video,frame_time,video_time = load_video(video_path, args)
-        # load splittimes, split into scenes, loop through and write output to
-        # a file with scene num appended
-        video = image_processor.preprocess(video, return_tensors="pt")["pixel_values"].half().cuda()
-        video = [video]
-        #qs = question
-        qs = "what are the key events in this video?"
-        if args.add_time_instruction:
-            time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {len(video[0])} frames are uniformly sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
-            qs = f'{time_instruciton}\n{qs}'
+        qs = f"what are the specific plot points in this scene of the TV show {show_name}?"
+        #if args.add_time_instruction:
+            #time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {len(video[0])} frames are uniformly sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
+            #qs = f'{time_instruciton}\n{qs}'
         if model.config.mm_use_im_start_end:
             qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + "\n" + qs
         else:
             qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
 
         conv = conv_templates[args.conv_mode].copy()
-        #conv = ''
         conv.append_message(conv.roles[0], qs)
         conv.append_message(conv.roles[1], None)
         prompt = conv.get_prompt()
-        #prompt = qs
 
         input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).cuda()
         if tokenizer.pad_token_id is None:
@@ -201,45 +161,60 @@ def run_inference(args):
 
         attention_masks = input_ids.ne(tokenizer.pad_token_id).long().cuda()
 
-        #stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
-        #keywords = [stop_str]
-        #stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
-
         if args.cpu:
             model = model.float().cpu()
             attention_masks = attention_masks.cpu()
-            video = [video[0].cpu().float()]
+            scene_video = [scene_video[0].cpu().float()]
             input_ids = input_ids.cpu()
         else:
             model = model.cuda()
         with torch.inference_mode():
-            if "mistral" not in cfg_pretrained._name_or_path.lower():
-                output_ids = model.generate(inputs=input_ids, images=video, attention_mask=attention_masks, modalities="video", do_sample=False, temperature=0.0, max_new_tokens=1024, top_p=0.1,num_beams=1,use_cache=True)
-            else:
-                output_ids = model.generate(inputs=input_ids, images=video, attention_mask=attention_masks, modalities="video", do_sample=False, temperature=0.0, max_new_tokens=1024, top_p=0.1, num_beams=1, use_cache=True)
+            output_ids = model.generate(inputs=input_ids, images=scene_video, attention_mask=attention_masks, modalities="video", do_sample=False, temperature=0.0, max_new_tokens=60, top_p=0.1,num_beams=1,use_cache=True)
         outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
 
-        print(f"Question: {prompt}\n")
+        #print(f"Question: {prompt}\n")
         print(f"Response: {outputs}\n")
-
-        #if "mistral" not in cfg_pretrained._name_or_path.lower():
-            #if outputs.endswith(stop_str):
-                #outputs = outputs[: -len(stop_str)]
 
         outputs = outputs.strip()
 
-        sample_set[video_path] = outputs
-        out_fn = os.path.basename(video_path).split('.')[0] + 'txt'
-        os.makedirs('outputs', exist_ok=True)
-        with open(f'outputs/{out_fn}', 'w') as f:
+        assert f'scene{i}' not in outputs_dict
+        outputs_dict[f'scene{i}'] = outputs
+        print('saving to', out_fp)
+        with open(out_fp, 'w') as f:
             f.write(outputs)
-        #ans_file.write(json.dumps(sample_set, ensure_ascii=False) + "\n")
-        #ans_file.flush()
 
+    runtime = time()-run_starttime
+    print(f'run time: {runtime:.3f}, per scene: {runtime/len(all_videos):.3f}')
     with open(json_out_fp, 'w') as f:
-        json.dump(sample_set, f)
+        json.dump(outputs_dict, f)
 
 
 if __name__ == "__main__":
     args = parse_args()
-    run_inference(args)
+    model_name = get_model_name_from_path(args.model_path)
+    overwrite_config = {}
+    overwrite_config["mm_spatial_pool_mode"] = args.mm_spatial_pool_mode
+    overwrite_config["mm_spatial_pool_stride"] = args.mm_spatial_pool_stride
+    overwrite_config["mm_newline_position"] = args.mm_newline_position
+    load_starttime = time()
+    tokenizer, model, image_processor, _ = load_pretrained_model(args.model_path, args.model_base, model_name, load_8bit=args.load_8bit, overwrite_config=overwrite_config, attn_implementation='sdpa')
+    print(f'load time: {time()-load_starttime:.3f}')
+    #tokenizer, model, image_processor = None, None, None
+    seaseps = []
+    show_data_dir = join(args.data_dir_prefix, 'tvqa-videos', args.show_name)
+    if args.season == -1:
+        seass_to_compute = [fn[7:] for fn in os.listdir(show_data_dir)]
+    else:
+        seass_to_compute = [args.season]
+
+    for seas in seass_to_compute:
+        if args.ep == -1:
+            for fn in os.listdir(f'{show_data_dir}/season_{seas}'):
+                ep_num = fn[8:].removesuffix('.mp4')
+                seaseps.append((seas, ep_num))
+        else:
+            seaseps.append((seas, args.ep))
+
+    print(seaseps)
+    for seas, ep in seaseps:
+        run_inference(args, tokenizer, model, image_processor, args.show_name, seas, ep)

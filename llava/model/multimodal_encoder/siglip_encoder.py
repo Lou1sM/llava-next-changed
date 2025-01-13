@@ -62,6 +62,8 @@ class SigLipImageProcessor:
         ]
 
         images = reduce(lambda x, f: [*map(f, x)], transforms, images)
+        #import numpy as np
+        #data = {"pixel_values": [x.astype(np.float64) for x in images]}
         data = {"pixel_values": images}
 
         return BatchFeature(data=data, tensor_type=return_tensors)

@@ -262,7 +262,7 @@ class Conversation:
                     else:
                         msg = re.sub(r"(<image>)\n(?=<image>)", r"\1 ", msg)
 
-                    img_str_list = []                         
+                    img_str_list = []
                     for img in image:
                         if self.is_image_file(img):
                             img_b64_str = self.process_image(img, "Default", return_pil=False, image_format="JPEG")
@@ -311,17 +311,18 @@ class Conversation:
 
 
 conv_vicuna_v0 = Conversation(
-    system="A chat between a curious human and an artificial intelligence assistant. " "The assistant gives helpful, detailed, and polite answers to the human's questions.",
+    #system="A chat between a curious human and an artificial intelligence assistant. " "The assistant gives helpful, detailed, and polite answers to the human's questions.",
+    system="A chat between a human and an artificial intelligence assistant. " "The assistant gives detailed, and concise answers that get straight to the point.",
     roles=("Human", "Assistant"),
     messages=[
         ["Human", "What are the key differences between renewable and non-renewable energy sources?"],
         [
             "Assistant",
-            "Renewable energy sources are those that can be replenished naturally in a relatively "
-            "short amount of time, such as solar, wind, hydro, geothermal, and biomass. "
-            "Non-renewable energy sources, on the other hand, are finite and will eventually be "
-            "depleted, such as coal, oil, and natural gas. Here are some key differences between "
-            "renewable and non-renewable energy sources:\n"
+            #"Renewable energy sources are those that can be replenished naturally in a relatively "
+            #"short amount of time, such as solar, wind, hydro, geothermal, and biomass. "
+            #"Non-renewable energy sources, on the other hand, are finite and will eventually be "
+            #"depleted, such as coal, oil, and natural gas. Here are some key differences between "
+            #"renewable and non-renewable energy sources:\n"
             "1. Availability: Renewable energy sources are virtually inexhaustible, while non-renewable "
             "energy sources are finite and will eventually run out.\n"
             "2. Environmental impact: Renewable energy sources have a much lower environmental impact "
