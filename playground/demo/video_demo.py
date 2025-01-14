@@ -129,6 +129,8 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
             scene_video = scene_video[idxs]
             print('reshaping to:', scene_video.shape)
         assert len(scene_video) <= 4
+        if len(scene_video)==0:
+            continue
         if os.path.exists(out_fp) and not args.recompute:
             print(f'{out_fp} already exists, skipping')
             continue
