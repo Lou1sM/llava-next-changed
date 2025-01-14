@@ -241,7 +241,7 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
             f.write(outputs)
 
     runtime = time()-run_starttime
-    print(f'run time: {runtime:.3f}, per scene: {runtime/len(all_videos):.3f}')
+    print(f'run time: {runtime:.3f}, per scene: {runtime/len(all_scene_videos):.3f}')
     with open(json_out_fp, 'w') as f:
         json.dump(outputs_dict, f)
 
