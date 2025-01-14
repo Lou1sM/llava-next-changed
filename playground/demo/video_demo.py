@@ -166,7 +166,8 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     json_out_fp = os.path.join(out_dir, 'all.json')
     # Set model configuration parameters if they exist
 
-    return 0,0
+    if args.no_model:
+        return 0,0
     run_starttime = time()
     for i, scene_video in enumerate(all_scene_videos):
         out_fp = join(out_dir, f'scene{i}')
