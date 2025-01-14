@@ -106,12 +106,13 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     vid_subpath = f'{show_name}/season_{season}/episode_{episode}'
     #video_path = join('../amazon_video/data/full-videos', f'{vid_subpath}.mp4')
     video_path = join(args.data_dir_prefix, 'tvqa-videos', f'{vid_subpath}.mp4')
+    print('path', video_path)
     assert os.path.exists(video_path)
     scene_split_points = np.load(f'{args.data_dir_prefix}/tvqa-kfs-by-scene/{vid_subpath}/scenesplit_timepoints.npy')
     args.for_get_frames_num *= len(scene_split_points)+1
     video,frame_time,video_time = load_video(video_path, args)
     ext_split_points = np.array([0] + list(scene_split_points) + [video_time])
-    idx_split_points = (scene_split_points*args.for_get_frames_num / video_time).astype(int)
+    idx_split_points = (ext_split_points*args.for_get_frames_num / video_time).astype(int)
     idx_split_points = np.append(idx_split_points, args.for_get_frames_num)
     all_videos = [video[idx_split_points[i]:idx_split_points[i+1]] for i in range(len(idx_split_points)-1)]
     # load splittimes, split into scenes, loop through and write output to
