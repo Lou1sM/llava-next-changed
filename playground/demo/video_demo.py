@@ -110,17 +110,13 @@ def extract_frames_ffmpeg(video_path, timepoints):
 
     return images
 
+import ffmpeg
+
 def vid_duration(video_path):
-    # Get video duration using ffprobe
-    duration_cmd = [
-        'ffprobe', '-v', 'error', '-show_entries',
-        'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path
-    ]
-    duration_result = subprocess.run(duration_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    duration = float(duration_result.stdout.decode().strip())
+    probe = ffmpeg.probe(video_path)
+    duration = float(probe['format']['duration'])
     return duration
 
-# Example usage
 def load_video_base64(path):
     video = cv2.VideoCapture(path)
 
@@ -149,7 +145,8 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     #args.for_get_frames_num *= len(scene_split_points)+1
     #video,frame_time,video_time = load_video(video_path, args)
     video_time = vid_duration(video_path)
-    ext_split_points = np.array([0] + list(scene_split_points) + [video_time])
+    #ext_split_points = np.array([0] + list(scene_split_points) + [video_time])
+    ext_split_points = np.array([0] + list(scene_split_points))
     all_scene_videos = []
     for i, start in enumerate(ext_split_points[:-1]):
         end = ext_split_points[i+1]
