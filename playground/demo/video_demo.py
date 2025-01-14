@@ -18,7 +18,7 @@ import math
 from tqdm import tqdm
 from decord import VideoReader, cpu
 
-from transformers import AutoConfig
+from natsort import natsorted
 
 import cv2
 import base64
@@ -111,6 +111,7 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     scene_split_points = np.load(f'{args.data_dir_prefix}/tvqa-kfs-by-scene/{vid_subpath}/scenesplit_timepoints.npy')
     args.for_get_frames_num *= len(scene_split_points)+1
     video,frame_time,video_time = load_video(video_path, args)
+    print(f'full video shape: {video.shape}, split at {scene_split_points}')
     ext_split_points = np.array([0] + list(scene_split_points) + [video_time])
     idx_split_points = (ext_split_points*args.for_get_frames_num / video_time).astype(int)
     idx_split_points = np.append(idx_split_points, args.for_get_frames_num)
@@ -124,7 +125,7 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     run_starttime = time()
     for i, scene_video in enumerate(all_videos):
         out_fp = join(out_dir, f'scene{i}')
-        print('scene vid shape:', scene_video.shape)
+        print(f'scene{i} vid shape:', scene_video.shape)
         if scene_video.shape[0] > 4:
             idxs = torch.linspace(0, len(scene_video)-1, 4).int()
             scene_video = scene_video[idxs]
@@ -215,13 +216,13 @@ if __name__ == "__main__":
     seaseps = []
     show_data_dir = join(args.data_dir_prefix, 'tvqa-videos', args.show_name)
     if args.season == -1:
-        seass_to_compute = [fn[7:] for fn in os.listdir(show_data_dir)]
+        seass_to_compute = natsorted([fn[7:] for fn in os.listdir(show_data_dir)])
     else:
         seass_to_compute = [args.season]
 
     for seas in seass_to_compute:
         if args.ep == -1:
-            for fn in os.listdir(f'{show_data_dir}/season_{seas}'):
+            for fn in natsorted(os.listdir(f'{show_data_dir}/season_{seas}')):
                 ep_num = fn[8:].removesuffix('.mp4')
                 seaseps.append((seas, ep_num))
         else:
