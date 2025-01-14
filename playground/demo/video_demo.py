@@ -58,6 +58,7 @@ def parse_args():
     parser.add_argument("--add_time_instruction", type=str, default=False)
     parser.add_argument("--cpu", action='store_true')
     parser.add_argument("--recompute", action='store_true')
+    parser.add_argument("--no-model", action='store_true')
     parser.add_argument('--show-name', type=str, default='friends')
     parser.add_argument('--season', type=int, default=2)
     parser.add_argument('--ep', type=int, required=True)
@@ -122,6 +123,12 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     run_starttime = time()
     for i, scene_video in enumerate(all_videos):
         out_fp = join(out_dir, f'scene{i}')
+        print('scene vid shape:', scene_video.shape)
+        if scene_video.shape[0] > 4:
+            idxs = torch.linspace(0, len(scene_video)-1, 4).int()
+            scene_video = scene_video[idxs]
+            print('reshaping to:', scene_video.shape)
+        assert len(scene_video) <= 4
         if os.path.exists(out_fp) and not args.recompute:
             print(f'{out_fp} already exists, skipping')
             continue
@@ -197,9 +204,11 @@ if __name__ == "__main__":
     overwrite_config["mm_spatial_pool_stride"] = args.mm_spatial_pool_stride
     overwrite_config["mm_newline_position"] = args.mm_newline_position
     load_starttime = time()
-    tokenizer, model, image_processor, _ = load_pretrained_model(args.model_path, args.model_base, model_name, load_8bit=args.load_8bit, overwrite_config=overwrite_config, attn_implementation='sdpa')
+    if args.no_model:
+        tokenizer, model, image_processor = None, None, None
+    else:
+        tokenizer, model, image_processor, _ = load_pretrained_model(args.model_path, args.model_base, model_name, load_8bit=args.load_8bit, overwrite_config=overwrite_config, attn_implementation='sdpa')
     print(f'load time: {time()-load_starttime:.3f}')
-    #tokenizer, model, image_processor = None, None, None
     seaseps = []
     show_data_dir = join(args.data_dir_prefix, 'tvqa-videos', args.show_name)
     if args.season == -1:
