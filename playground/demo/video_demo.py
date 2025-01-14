@@ -1,4 +1,5 @@
 from time import time
+import av
 import argparse
 import os
 from os.path import join
@@ -84,6 +85,25 @@ def load_video(video_path,args):
 
     return spare_frames,frame_time,video_time
 
+def load_evenly_spaced_frames(video_path, N):
+    container = av.open(video_path)
+    video_stream = container.streams.video[0]
+    total_frames = video_stream.frames
+    duration = float(video_stream.duration * video_stream.time_base)
+
+    step = max(total_frames // N, 1)
+    frames = []
+
+    for i, frame in enumerate(container.decode(video=0)):
+        if i % step == 0:
+            img = frame.to_ndarray(format='rgb24')
+            frames.append(img)
+            if len(frames) == N:
+                break
+
+    container.close()
+    return np.array(frames), duration
+
 def load_video_base64(path):
     video = cv2.VideoCapture(path)
 
@@ -110,12 +130,13 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     assert os.path.exists(video_path)
     scene_split_points = np.load(f'{args.data_dir_prefix}/tvqa-kfs-by-scene/{vid_subpath}/scenesplit_timepoints.npy')
     args.for_get_frames_num *= len(scene_split_points)+1
-    video,frame_time,video_time = load_video(video_path, args)
+    #video,frame_time,video_time = load_video(video_path, args)
+    video, video_time = load_evenly_spaced_frames(video_path, len(scene_split_points)*10)
     print(f'full video shape: {video.shape}, split at {scene_split_points}')
     ext_split_points = np.array([0] + list(scene_split_points) + [video_time])
     idx_split_points = (ext_split_points*args.for_get_frames_num / video_time).astype(int)
-    idx_split_points = np.append(idx_split_points, args.for_get_frames_num)
     all_videos = [video[idx_split_points[i]:idx_split_points[i+1]] for i in range(len(idx_split_points)-1)]
+    print('scene videos shape:', [v.shape for v in all_videos])
     # load splittimes, split into scenes, loop through and write output to
     # a file with scene num appended
     os.makedirs(out_dir:=f'{args.data_dir_prefix}/lava-outputs/{vid_subpath}', exist_ok=True)
