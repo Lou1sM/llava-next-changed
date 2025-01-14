@@ -85,25 +85,42 @@ def load_video(video_path,args):
 
     return spare_frames,frame_time,video_time
 
-def load_evenly_spaced_frames(video_path, N):
-    container = av.open(video_path)
-    video_stream = container.streams.video[0]
-    total_frames = video_stream.frames
-    duration = float(video_stream.duration * video_stream.time_base)
+import subprocess
+from PIL import Image
+from io import BytesIO
 
-    step = max(total_frames // N, 1)
-    frames = []
+def extract_frames_ffmpeg(video_path, timepoints):
+    # Extract frames at specific timestamps
+    images = []
+    for t in timepoints:
+        cmd = [
+            'ffmpeg', '-ss', str(t), '-i', video_path,
+            '-frames:v', '1', '-f', 'image2pipe',
+            '-vcodec', 'png', '-'
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        buffer = BytesIO(result.stdout)
+        try:
+            img = Image.open(buffer)
+            images.append(img.copy())
+            img.close()
+        except:
+            #images.append(None)  # Handle failed frame extraction
+            pass
 
-    for i, frame in enumerate(container.decode(video=0)):
-        if i % step == 0:
-            img = frame.to_ndarray(format='rgb24')
-            frames.append(img)
-            if len(frames) == N:
-                break
+    return images
 
-    container.close()
-    return np.array(frames), duration
+def vid_duration(video_path):
+    # Get video duration using ffprobe
+    duration_cmd = [
+        'ffprobe', '-v', 'error', '-show_entries',
+        'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path
+    ]
+    duration_result = subprocess.run(duration_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    duration = float(duration_result.stdout.decode().strip())
+    return duration
 
+# Example usage
 def load_video_base64(path):
     video = cv2.VideoCapture(path)
 
@@ -129,22 +146,32 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     print('path', video_path)
     assert os.path.exists(video_path)
     scene_split_points = np.load(f'{args.data_dir_prefix}/tvqa-kfs-by-scene/{vid_subpath}/scenesplit_timepoints.npy')
-    args.for_get_frames_num *= len(scene_split_points)+1
+    #args.for_get_frames_num *= len(scene_split_points)+1
     #video,frame_time,video_time = load_video(video_path, args)
-    video, video_time = load_evenly_spaced_frames(video_path, len(scene_split_points)*10)
-    print(f'full video shape: {video.shape}, split at {scene_split_points}')
+    video_time = vid_duration(video_path)
     ext_split_points = np.array([0] + list(scene_split_points) + [video_time])
-    idx_split_points = (ext_split_points*args.for_get_frames_num / video_time).astype(int)
-    all_videos = [video[idx_split_points[i]:idx_split_points[i+1]] for i in range(len(idx_split_points)-1)]
-    print('scene videos shape:', [v.shape for v in all_videos])
+    all_scene_videos = []
+    for i, start in enumerate(ext_split_points[:-1]):
+        end = ext_split_points[i+1]
+        scene_timepoints = np.linspace(start, end, 4)
+        scene_frames = extract_frames_ffmpeg(video_path, scene_timepoints)
+        svid = np.stack([np.array(x) for x in scene_frames])
+        all_scene_videos.append(svid)
+    #idx_split_points = (ext_split_points*args.for_get_frames_num / video_time).astype(int)
+    #print(idx_split_points)
+    #if idx_split_points.max()>1e5:
+    #    breakpoint()
+    #all_videos = [video[idx_split_points[i]:idx_split_points[i+1]] for i in range(len(idx_split_points)-1)]
+    print('scene videos shape:', [v.shape for v in all_scene_videos])
     # load splittimes, split into scenes, loop through and write output to
     # a file with scene num appended
     os.makedirs(out_dir:=f'{args.data_dir_prefix}/lava-outputs/{vid_subpath}', exist_ok=True)
     json_out_fp = os.path.join(out_dir, 'all.json')
     # Set model configuration parameters if they exist
 
+    return 0,0
     run_starttime = time()
-    for i, scene_video in enumerate(all_videos):
+    for i, scene_video in enumerate(all_scene_videos):
         out_fp = join(out_dir, f'scene{i}')
         print(f'scene{i} vid shape:', scene_video.shape)
         if scene_video.shape[0] > 4:
