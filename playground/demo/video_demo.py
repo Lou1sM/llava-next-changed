@@ -154,6 +154,8 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
         scene_frames = extract_frames_ffmpeg(video_path, scene_timepoints)
         svid = np.stack([np.array(x) for x in scene_frames])
         all_scene_videos.append(svid)
+    if len(all_scene_videos)==0:
+        return 0, 0
     #idx_split_points = (ext_split_points*args.for_get_frames_num / video_time).astype(int)
     #print(idx_split_points)
     #if idx_split_points.max()>1e5:
