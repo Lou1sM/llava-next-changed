@@ -131,7 +131,11 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     print('path', video_path)
     assert os.path.exists(video_path)
     #scene_split_points = np.load(f'{args.data_dir_prefix}/tvqa-kfs-by-scene/{vid_subpath}/scenesplit_timepoints.npy')
-    scene_split_points = tvqa_splits[show_name][f'season_{season}'][f'episode_{episode}'][args.splits]
+    try:
+        scene_split_points = tvqa_splits[show_name][f'season_{season}'][f'episode_{episode}'][args.splits]
+    except KeyError as e:
+        print(f'Error for {show_name}, {season}, {episode}: {e}')
+        return
     ext_split_points = np.array([0] + list(scene_split_points))
     all_scene_videos = []
     for i, start in enumerate(ext_split_points[:-1]):
