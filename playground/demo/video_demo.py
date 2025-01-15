@@ -1,5 +1,4 @@
 from time import time
-import av
 import argparse
 import os
 from os.path import join
@@ -8,15 +7,12 @@ import torch
 import numpy as np
 torch.from_numpy(np.ones(4))
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
-from llava.conversation import conv_templates, SeparatorStyle
+from llava.conversation import conv_templates
 from llava.model.builder import load_pretrained_model
-from llava.utils import disable_torch_init
-from llava.mm_utils import process_anyres_image,tokenizer_image_token, get_model_name_from_path, KeywordsStoppingCriteria
+from llava.mm_utils import tokenizer_image_token, get_model_name_from_path
 
 import json
-import os
 import math
-from tqdm import tqdm
 from decord import VideoReader, cpu
 
 from natsort import natsorted
@@ -25,6 +21,8 @@ import cv2
 import base64
 
 
+with open('tvqa-splits.json') as f:
+    tvqa_splits = json.load(f)
 
 def split_list(lst, n):
     """Split a list into n (roughly) equal-sized chunks"""
@@ -39,6 +37,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", type=str, default='lmms-lab/LLaVA-Video-7B-Qwen2')
     parser.add_argument("--model-base", type=str)
+    parser.add_argument("--splits", type=str, default='ours', choices=['ours', 'psd', 'unif'])
     parser.add_argument("--data-dir-prefix", type=str, default='.')
     parser.add_argument("--conv-mode", type=str, default='default')
     parser.add_argument("--chunk-idx", type=int, default=0)
@@ -110,13 +109,6 @@ def extract_frames_ffmpeg(video_path, timepoints):
 
     return images
 
-import ffmpeg
-
-def vid_duration(video_path):
-    probe = ffmpeg.probe(video_path)
-    duration = float(probe['format']['duration'])
-    return duration
-
 def load_video_base64(path):
     video = cv2.VideoCapture(path)
 
@@ -133,19 +125,13 @@ def load_video_base64(path):
     return base64Frames
 
 def run_inference(args, tokenizer, model, image_processor, show_name, season, episode):
-    """Run inference on ActivityNet QA DataSet using the Video-ChatGPT model."""
-
     outputs_dict = {}
     vid_subpath = f'{show_name}/season_{season}/episode_{episode}'
-    #video_path = join('../amazon_video/data/full-videos', f'{vid_subpath}.mp4')
     video_path = join(args.data_dir_prefix, 'tvqa-videos', f'{vid_subpath}.mp4')
     print('path', video_path)
     assert os.path.exists(video_path)
-    scene_split_points = np.load(f'{args.data_dir_prefix}/tvqa-kfs-by-scene/{vid_subpath}/scenesplit_timepoints.npy')
-    #args.for_get_frames_num *= len(scene_split_points)+1
-    #video,frame_time,video_time = load_video(video_path, args)
-    video_time = vid_duration(video_path)
-    #ext_split_points = np.array([0] + list(scene_split_points) + [video_time])
+    #scene_split_points = np.load(f'{args.data_dir_prefix}/tvqa-kfs-by-scene/{vid_subpath}/scenesplit_timepoints.npy')
+    scene_split_points = tvqa_splits[show_name][f'season_{season}'][f'episode_{episode}'][args.splits]
     ext_split_points = np.array([0] + list(scene_split_points))
     all_scene_videos = []
     for i, start in enumerate(ext_split_points[:-1]):
@@ -156,18 +142,11 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
         all_scene_videos.append(svid)
     if len(all_scene_videos)==0:
         return 0, 0
-    #idx_split_points = (ext_split_points*args.for_get_frames_num / video_time).astype(int)
-    #print(idx_split_points)
-    #if idx_split_points.max()>1e5:
-    #    breakpoint()
-    #all_videos = [video[idx_split_points[i]:idx_split_points[i+1]] for i in range(len(idx_split_points)-1)]
     print('scene videos shape:', [v.shape for v in all_scene_videos])
-    # load splittimes, split into scenes, loop through and write output to
-    # a file with scene num appended
-    os.makedirs(out_dir:=f'{args.data_dir_prefix}/lava-outputs/{vid_subpath}', exist_ok=True)
+    out_dir = f'{args.data_dir_prefix}/lava-outputs/{vid_subpath}/{args.splits}'
+    os.makedirs(out_dir, exist_ok=True)
     json_out_fp = os.path.join(out_dir, 'all.json')
-    # Set model configuration parameters if they exist
-
+    print('saving output to', json_out_fp)
     if args.no_model:
         return 0,0
     run_starttime = time()
@@ -185,7 +164,6 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
             print(f'{out_fp} already exists, skipping')
             continue
         scene_video = image_processor.preprocess(scene_video, return_tensors="pt")["pixel_values"].half().cuda()
-        #scene_video = image_processor.preprocess(scene_video, return_tensors=None)
         scene_video = [scene_video]
 
         if getattr(model.config, "force_sample", None) is not None:
@@ -199,9 +177,6 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
             args.add_time_instruction = False
 
         qs = f"what are the specific plot points in this scene of the TV show {show_name}?"
-        #if args.add_time_instruction:
-            #time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {len(video[0])} frames are uniformly sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
-            #qs = f'{time_instruciton}\n{qs}'
         if model.config.mm_use_im_start_end:
             qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + "\n" + qs
         else:
@@ -231,7 +206,6 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
             output_ids = model.generate(inputs=input_ids, images=scene_video, attention_mask=attention_masks, modalities="video", do_sample=False, temperature=0.0, max_new_tokens=60, top_p=0.1,num_beams=1,use_cache=True)
         outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
 
-        #print(f"Question: {prompt}\n")
         print(f"Response: {outputs}\n")
 
         outputs = outputs.strip()
