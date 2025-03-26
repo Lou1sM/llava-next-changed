@@ -128,7 +128,6 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     outputs_dict = {}
     vid_subpath = f'{show_name}/season_{season}/episode_{episode}'
     video_path = join(args.data_dir_prefix, 'tvqa-videos', f'{vid_subpath}.mp4')
-    breakpoint()
     print('path', video_path)
     assert os.path.exists(video_path)
     #scene_split_points = np.load(f'{args.data_dir_prefix}/tvqa-kfs-by-scene/{vid_subpath}/scenesplit_timepoints.npy')
@@ -161,7 +160,6 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     if args.no_model:
         return 0,0
     run_starttime = time()
-    breakpoint()
     for i, scene_video in enumerate(all_scene_videos):
         out_fp = join(out_dir, f'scene{i}')
         if scene_video is None:
