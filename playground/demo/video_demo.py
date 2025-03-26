@@ -214,7 +214,7 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
                 scene_video = [scene_video[0].cpu().float()]
                 input_ids = input_ids.cpu()
             else:
-                model = model.cuda()
+                model = model.half().cuda()
             with torch.inference_mode():
                 output_ids = model.generate(inputs=input_ids, images=scene_video, attention_mask=attention_masks, modalities="video", do_sample=False, temperature=0.0, max_new_tokens=60, top_p=0.1,num_beams=1,use_cache=True)
             outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
@@ -248,21 +248,45 @@ if __name__ == "__main__":
     else:
         tokenizer, model, image_processor, _ = load_pretrained_model(args.model_path, args.model_base, model_name, load_8bit=args.load_8bit, overwrite_config=overwrite_config, attn_implementation='sdpa')
     print(f'load time: {time()-load_starttime:.3f}')
-    seaseps = []
-    show_data_dir = join(args.data_dir_prefix, 'tvqa-videos', args.show_name)
-    if args.season == -1:
-        seass_to_compute = natsorted([fn[7:] for fn in os.listdir(show_data_dir)])
+    #show_data_dir = join(args.data_dir_prefix, 'tvqa-videos', args.show_name)
+    vid_data_dir = join(args.data_dir_prefix, 'tvqa-videos')
+    #seaseps = []
+    #if args.season == -1:
+    #    seass_to_compute = natsorted([fn[7:] for fn in os.listdir(show_data_dir)])
+    #else:
+    #    seass_to_compute = [args.season]
+
+    #for seas in seass_to_compute:
+    #    if args.ep == -1:
+    #        for fn in natsorted(os.listdir(f'{show_data_dir}/season_{seas}')):
+    #            ep_num = fn[8:].removesuffix('.mp4')
+    #            seaseps.append((seas, ep_num))
+    #    else:
+    #        seaseps.append((seas, args.ep))
+
+    #print(seaseps)
+    showseaseps = []
+    if args.show_name=='all':
+        show_names_to_compute = natsorted(os.listdir(vid_data_dir))
+        show_names_to_compute = [x for x in show_names_to_compute if x!='bbt']
     else:
-        seass_to_compute = [args.season]
-
-    for seas in seass_to_compute:
-        if args.ep == -1:
-            for fn in natsorted(os.listdir(f'{show_data_dir}/season_{seas}')):
-                ep_num = fn[8:].removesuffix('.mp4')
-                seaseps.append((seas, ep_num))
+        show_names_to_compute = [args.show_name]
+    for show_name in show_names_to_compute:
+        if args.season == -1:
+            seass_to_compute = natsorted([int(fn[7:]) for fn in os.listdir(f'{vid_data_dir}/{show_name}')])
         else:
-            seaseps.append((seas, args.ep))
+            seass_to_compute = [args.season]
 
-    print(seaseps)
-    for seas, ep in seaseps:
-        run_inference(args, tokenizer, model, image_processor, args.show_name, seas, ep)
+        for seas_num in seass_to_compute:
+            if args.ep == -1:
+                for fn in natsorted(os.listdir(f'{vid_data_dir}/{show_name}/season_{seas_num}')):
+                    #ep_num = int(fn[8:].removesuffix('.mp4'))
+                    x = fn[8:]
+                    if x.endswith('.mp4'):
+                        x = x[:-4]
+                    ep_num = int(x)
+                    showseaseps.append((show_name, seas_num, ep_num))
+            else:
+                showseaseps.append((show_name, seas_num, args.ep))
+    for show, seas, ep in showseaseps:
+        run_inference(args, tokenizer, model, image_processor, show, seas, ep)
