@@ -37,7 +37,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", type=str, default='lmms-lab/LLaVA-Video-7B-Qwen2')
     parser.add_argument("--model-base", type=str)
-    parser.add_argument("--splits", type=str, default='ours', choices=['ours', 'psd', 'unif'])
+    parser.add_argument("--splits", type=str, default='ours', choices=['ours', 'psd', 'unif', 'GMM', 'bassl'])
     parser.add_argument("--data-dir-prefix", type=str, default='.')
     parser.add_argument("--conv-mode", type=str, default='default')
     parser.add_argument("--chunk-idx", type=int, default=0)
@@ -51,7 +51,6 @@ def parse_args():
     parser.add_argument("--overwrite", type=lambda x: (str(x).lower() == 'true'), default=True)
     parser.add_argument("--for_get_frames_num", type=int, default=4)
     parser.add_argument("--load_8bit",  type=lambda x: (str(x).lower() == 'true'), default=False)
-    parser.add_argument("--prompt", type=str, default=None)
     parser.add_argument("--api_key", type=str, help="OpenAI API key")
     parser.add_argument("--mm_newline_position", type=str, default="no_token")
     parser.add_argument("--force_sample", type=lambda x: (str(x).lower() == 'true'), default=False)
@@ -62,6 +61,7 @@ def parse_args():
     parser.add_argument('--show-name', type=str, default='friends')
     parser.add_argument('--season', type=int, default=2)
     parser.add_argument('--ep', type=int, required=True)
+    #parser.add_argument('--prompt', type=int, required=True)
     return parser.parse_args()
 
 def load_video(video_path,args):
@@ -128,11 +128,15 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     outputs_dict = {}
     vid_subpath = f'{show_name}/season_{season}/episode_{episode}'
     video_path = join(args.data_dir_prefix, 'tvqa-videos', f'{vid_subpath}.mp4')
+    breakpoint()
     print('path', video_path)
     assert os.path.exists(video_path)
     #scene_split_points = np.load(f'{args.data_dir_prefix}/tvqa-kfs-by-scene/{vid_subpath}/scenesplit_timepoints.npy')
+    #if args.splits in ['GMM', 'bassl']:
+        #scene_split_points = np.load(f'data/baseline-ffmpeg-keyframes-by-scene/{args.splits}/{vid_subpath}/scenesplit_timepoints.npy')
+    #else:
     try:
-        scene_split_points = tvqa_splits[show_name][f'season_{season}'][f'episode_{episode}'][args.splits]
+        scene_split_points = tvqa_splits[args.splits][show_name][f'season_{season}'][f'episode_{episode}']
     except KeyError as e:
         print(f'Error for {show_name}, {season}, {episode}: {e}')
         return
@@ -140,13 +144,16 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     all_scene_videos = []
     for i, start in enumerate(ext_split_points[:-1]):
         end = ext_split_points[i+1]
-        scene_timepoints = np.linspace(start, end, 4)
-        scene_frames = extract_frames_ffmpeg(video_path, scene_timepoints)
-        svid = np.stack([np.array(x) for x in scene_frames])
+        if end-start < 10:
+            svid = None
+        else:
+            scene_timepoints = np.linspace(start, end, 4)
+            scene_frames = extract_frames_ffmpeg(video_path, scene_timepoints)
+            svid = np.stack([np.array(x) for x in scene_frames])
         all_scene_videos.append(svid)
     if len(all_scene_videos)==0:
         return 0, 0
-    print('scene videos shape:', [v.shape for v in all_scene_videos])
+    print('scene videos shape:', [v if v is None else v.shape for v in all_scene_videos])
     out_dir = f'{args.data_dir_prefix}/lava-outputs/{vid_subpath}/{args.splits}'
     os.makedirs(out_dir, exist_ok=True)
     json_out_fp = os.path.join(out_dir, 'all.json')
@@ -154,67 +161,71 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     if args.no_model:
         return 0,0
     run_starttime = time()
+    breakpoint()
     for i, scene_video in enumerate(all_scene_videos):
         out_fp = join(out_dir, f'scene{i}')
-        print(f'scene{i} vid shape:', scene_video.shape)
-        if scene_video.shape[0] > 4:
-            idxs = torch.linspace(0, len(scene_video)-1, 4).int()
-            scene_video = scene_video[idxs]
-            print('reshaping to:', scene_video.shape)
-        assert len(scene_video) <= 4
-        if len(scene_video)==0:
-            continue
-        if os.path.exists(out_fp) and not args.recompute:
-            print(f'{out_fp} already exists, skipping')
-            continue
-        scene_video = image_processor.preprocess(scene_video, return_tensors="pt")["pixel_values"].half().cuda()
-        scene_video = [scene_video]
-
-        if getattr(model.config, "force_sample", None) is not None:
-            args.force_sample = model.config.force_sample
+        if scene_video is None:
+            outputs = f'A very short scene from the show {args.show_name}'
         else:
-            args.force_sample = False
+            print(f'scene{i} vid shape:', scene_video.shape)
+            if scene_video.shape[0] > 4:
+                idxs = torch.linspace(0, len(scene_video)-1, 4).int()
+                scene_video = scene_video[idxs]
+                print('reshaping to:', scene_video.shape)
+            assert len(scene_video) <= 4
+            if len(scene_video)==0:
+                continue
+            if os.path.exists(out_fp) and not args.recompute:
+                print(f'{out_fp} already exists, skipping')
+                continue
+            scene_video = image_processor.preprocess(scene_video, return_tensors="pt")["pixel_values"].half().cuda()
+            scene_video = [scene_video]
 
-        if getattr(model.config, "add_time_instruction", None) is not None:
-            args.add_time_instruction = model.config.add_time_instruction
-        else:
-            args.add_time_instruction = False
+            if getattr(model.config, "force_sample", None) is not None:
+                args.force_sample = model.config.force_sample
+            else:
+                args.force_sample = False
 
-        qs = f"what are the specific plot points in this scene of the TV show {show_name}?"
-        if model.config.mm_use_im_start_end:
-            qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + "\n" + qs
-        else:
-            qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
+            if getattr(model.config, "add_time_instruction", None) is not None:
+                args.add_time_instruction = model.config.add_time_instruction
+            else:
+                args.add_time_instruction = False
 
-        conv = conv_templates[args.conv_mode].copy()
-        conv.append_message(conv.roles[0], qs)
-        conv.append_message(conv.roles[1], None)
-        prompt = conv.get_prompt()
+            qs = f"what are the specific plot points in this scene of the TV show {show_name}?"
+            if model.config.mm_use_im_start_end:
+                qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + "\n" + qs
+            else:
+                qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
 
-        input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).cuda()
-        if tokenizer.pad_token_id is None:
-            if "qwen" in tokenizer.name_or_path.lower():
-                print("Setting pad token to bos token for qwen model.")
-                tokenizer.pad_token_id = 151643
+            conv = conv_templates[args.conv_mode].copy()
+            conv.append_message(conv.roles[0], qs)
+            conv.append_message(conv.roles[1], None)
+            prompt = conv.get_prompt()
 
-        attention_masks = input_ids.ne(tokenizer.pad_token_id).long().cuda()
+            input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).cuda()
+            if tokenizer.pad_token_id is None:
+                if "qwen" in tokenizer.name_or_path.lower():
+                    print("Setting pad token to bos token for qwen model.")
+                    tokenizer.pad_token_id = 151643
 
-        if args.cpu:
-            model = model.float().cpu()
-            attention_masks = attention_masks.cpu()
-            scene_video = [scene_video[0].cpu().float()]
-            input_ids = input_ids.cpu()
-        else:
-            model = model.cuda()
-        with torch.inference_mode():
-            output_ids = model.generate(inputs=input_ids, images=scene_video, attention_mask=attention_masks, modalities="video", do_sample=False, temperature=0.0, max_new_tokens=60, top_p=0.1,num_beams=1,use_cache=True)
-        outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+            attention_masks = input_ids.ne(tokenizer.pad_token_id).long().cuda()
 
-        print(f"Response: {outputs}\n")
+            if args.cpu:
+                model = model.float().cpu()
+                attention_masks = attention_masks.cpu()
+                scene_video = [scene_video[0].cpu().float()]
+                input_ids = input_ids.cpu()
+            else:
+                model = model.cuda()
+            with torch.inference_mode():
+                output_ids = model.generate(inputs=input_ids, images=scene_video, attention_mask=attention_masks, modalities="video", do_sample=False, temperature=0.0, max_new_tokens=60, top_p=0.1,num_beams=1,use_cache=True)
+            outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
 
-        outputs = outputs.strip()
+            print(f"Response: {outputs}\n")
 
-        assert f'scene{i}' not in outputs_dict
+            outputs = outputs.strip()
+
+            assert f'scene{i}' not in outputs_dict
         outputs_dict[f'scene{i}'] = outputs
         print('saving to', out_fp)
         with open(out_fp, 'w') as f:
