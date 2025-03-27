@@ -1,4 +1,5 @@
 from time import time
+from tqdm import tqdm
 import argparse
 import os
 from os.path import join
@@ -37,7 +38,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", type=str, default='lmms-lab/LLaVA-Video-7B-Qwen2')
     parser.add_argument("--model-base", type=str)
-    parser.add_argument("--splits", type=str, default='ours', choices=['ours', 'psd', 'unif', 'GMM', 'bassl'])
+    parser.add_argument("--splits", type=str, default='ours', choices=['ours', 'psd', 'unif', 'GMM', 'bassl', 'scrl'])
     parser.add_argument("--data-dir-prefix", type=str, default='.')
     parser.add_argument("--conv-mode", type=str, default='default')
     parser.add_argument("--chunk-idx", type=int, default=0)
@@ -288,5 +289,5 @@ if __name__ == "__main__":
                     showseaseps.append((show_name, seas_num, ep_num))
             else:
                 showseaseps.append((show_name, seas_num, args.ep))
-    for show, seas, ep in showseaseps:
+    for show, seas, ep in tqdm(showseaseps):
         run_inference(args, tokenizer, model, image_processor, show, seas, ep)
