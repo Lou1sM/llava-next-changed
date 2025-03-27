@@ -154,7 +154,7 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     if len(all_scene_videos)==0:
         return 0, 0
     print('scene videos shape:', [v if v is None else v.shape for v in all_scene_videos])
-    out_dir = f'{args.data_dir_prefix}/lava-outputs/{vid_subpath}/{args.splits}'
+    out_dir = join(args.data_dir_prefix, f'lava-outputs/{vid_subpath}/{args.splits}')
     os.makedirs(out_dir, exist_ok=True)
     json_out_fp = os.path.join(out_dir, 'all.json')
     print('saving output to', json_out_fp)
@@ -164,7 +164,7 @@ def run_inference(args, tokenizer, model, image_processor, show_name, season, ep
     for i, scene_video in enumerate(all_scene_videos):
         out_fp = join(out_dir, f'scene{i}')
         if scene_video is None:
-            outputs = f'A very short scene from the show {args.show_name}'
+            outputs = f'A very short scene from the show {show_name}'
         else:
             print(f'scene{i} vid shape:', scene_video.shape)
             if scene_video.shape[0] > 4:
